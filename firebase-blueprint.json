@@ -1,0 +1,97 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Stores user preferences and basic info",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "currency": { "type": "string", "default": "BRL" },
+        "monthlyIncome": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "An income or expense record",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "type": { "type": "string", "enum": ["income", "expense"] },
+        "amount": { "type": "number" },
+        "category": { "type": "string" },
+        "description": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "type", "amount", "category", "date"]
+    },
+    "Budget": {
+      "title": "Budget",
+      "description": "Spending limits per category",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "category": { "type": "string" },
+        "amount": { "type": "number" },
+        "period": { "type": "string", "enum": ["monthly", "weekly"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "category", "amount"]
+    },
+    "Goal": {
+      "title": "Financial Goal",
+      "description": "Savings targets for specific items or events",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "targetAmount": { "type": "number" },
+        "currentAmount": { "type": "number" },
+        "deadline": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "title", "targetAmount", "currentAmount"]
+    },
+    "Bill": {
+      "title": "Bill",
+      "description": "Upcoming payments",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "amount": { "type": "number" },
+        "dueDate": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["paid", "unpaid"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "title", "amount", "dueDate", "status"]
+    },
+    "Investment": {
+      "title": "Investment",
+      "description": "Tracks user investments and their performance",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "symbol": { "type": "string" },
+        "assetType": { "type": "string", "enum": ["stock", "crypto", "fund", "fixed_income"] },
+        "quantity": { "type": "number" },
+        "purchasePrice": { "type": "number" },
+        "purchaseDate": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "symbol", "assetType", "quantity", "purchasePrice", "purchaseDate"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": { "schema": "User", "description": "User profiles" },
+    "transactions/{transactionId}": { "schema": "Transaction", "description": "Financial transactions" },
+    "budgets/{budgetId}": { "schema": "Budget", "description": "Category budgets" },
+    "goals/{goalId}": { "schema": "Goal", "description": "Financial goals" },
+    "bills/{billId}": { "schema": "Bill", "description": "Bill alerts" },
+    "investments/{investmentId}": { "schema": "Investment", "description": "User investments" }
+  }
+}
