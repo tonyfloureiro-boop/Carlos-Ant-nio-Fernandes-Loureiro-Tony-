@@ -25,7 +25,8 @@
         "category": { "type": "string" },
         "description": { "type": "string" },
         "date": { "type": "string", "format": "date-time" },
-        "createdAt": { "type": "string", "format": "date-time" }
+        "createdAt": { "type": "string", "format": "date-time" },
+        "isDateUnspecified": { "type": "boolean" }
       },
       "required": ["userId", "type", "amount", "category", "date"]
     },
@@ -84,6 +85,22 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "symbol", "assetType", "quantity", "purchasePrice", "purchaseDate"]
+    },
+    "RealityProfile": {
+      "title": "Reality Profile",
+      "description": "User's life context for better financial advice",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "childrenCount": { "type": "number" },
+        "housingType": { "type": "string", "enum": ["rented", "owned", "financed", "family"] },
+        "maritalStatus": { "type": "string", "enum": ["single", "married", "divorced", "widowed", "stable_union"] },
+        "employmentStatus": { "type": "string", "enum": ["employed", "self_employed", "unemployed", "student", "retired"] },
+        "hasHealthInsurance": { "type": "boolean" },
+        "hasVehicle": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId"]
     }
   },
   "firestore": {
@@ -92,6 +109,7 @@
     "budgets/{budgetId}": { "schema": "Budget", "description": "Category budgets" },
     "goals/{goalId}": { "schema": "Goal", "description": "Financial goals" },
     "bills/{billId}": { "schema": "Bill", "description": "Bill alerts" },
-    "investments/{investmentId}": { "schema": "Investment", "description": "User investments" }
+    "investments/{investmentId}": { "schema": "Investment", "description": "User investments" },
+    "reality_profiles/{profileId}": { "schema": "RealityProfile", "description": "Life context profiles" }
   }
 }

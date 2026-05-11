@@ -15,6 +15,7 @@ export interface Transaction {
   description?: string;
   date: Date;
   createdAt: Date;
+  isDateUnspecified?: boolean;
 }
 
 export interface Budget {
@@ -52,4 +53,16 @@ export interface Investment {
   purchasePrice: number;
   purchaseDate: Date;
   createdAt: Date;
+}
+
+export interface RealityProfile {
+  id?: string;
+  userId: string;
+  childrenCount: number;
+  housingType: 'rented' | 'owned' | 'financed' | 'family';
+  maritalStatus: 'single' | 'married' | 'divorced' | 'widowed' | 'stable_union';
+  employmentStatus: 'employed' | 'self_employed' | 'unemployed' | 'student' | 'retired';
+  hasHealthInsurance: boolean;
+  hasVehicle: boolean;
+  updatedAt: Date;
 }

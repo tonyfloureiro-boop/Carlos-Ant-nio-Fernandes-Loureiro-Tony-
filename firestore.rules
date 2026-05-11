@@ -44,7 +44,8 @@ service cloud.firestore {
              data.amount is number && data.amount >= 0 &&
              data.category is string && data.category.size() <= 64 &&
              data.date is timestamp &&
-             (data.get('description', '') is string && data.get('description', '').size() <= 512);
+             (data.get('description', '') is string && data.get('description', '').size() <= 512) &&
+             (data.get('isDateUnspecified', false) is bool);
     }
 
     function isValidBudget(data) {
@@ -83,6 +84,17 @@ service cloud.firestore {
              data.purchaseDate is timestamp;
     }
 
+    function isValidRealityProfile(data) {
+      return data.keys().hasAll(['userId']) &&
+             data.userId == request.auth.uid &&
+             (data.get('childrenCount', 0) is number) &&
+             (data.get('housingType', 'family') in ['rented', 'owned', 'financed', 'family']) &&
+             (data.get('maritalStatus', 'single') in ['single', 'married', 'divorced', 'widowed', 'stable_union']) &&
+             (data.get('employmentStatus', 'employed') in ['employed', 'self_employed', 'unemployed', 'student', 'retired']) &&
+             (data.get('hasHealthInsurance', false) is bool) &&
+             (data.get('hasVehicle', false) is bool);
+    }
+
     // ---------------------------------------------------------
     // Routes
     // ---------------------------------------------------------
@@ -106,7 +118,7 @@ service cloud.firestore {
       allow get: if isSignedIn() && resource.data.userId == request.auth.uid;
       allow create: if isSignedIn() && isValidTransaction(incoming());
       allow update: if isSignedIn() && resource.data.userId == request.auth.uid && isValidTransaction(incoming()) &&
-                    incoming().diff(existing()).affectedKeys().hasOnly(['type', 'amount', 'category', 'date', 'description']);
+                    incoming().diff(existing()).affectedKeys().hasOnly(['type', 'amount', 'category', 'date', 'description', 'isDateUnspecified']);
       allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
     }
 
@@ -147,6 +159,19 @@ service cloud.firestore {
       allow create: if isSignedIn() && isValidInvestment(incoming());
       allow update: if isSignedIn() && resource.data.userId == request.auth.uid && isValidInvestment(incoming()) &&
                     incoming().diff(existing()).affectedKeys().hasOnly(['symbol', 'assetType', 'quantity', 'purchasePrice', 'purchaseDate']);
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // Reality Profiles
+    match /reality_profiles/{profileId} {
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow get: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidRealityProfile(incoming());
+      allow update: if isSignedIn() && resource.data.userId == request.auth.uid && isValidRealityProfile(incoming()) &&
+                    incoming().diff(existing()).affectedKeys().hasOnly([
+                      'childrenCount', 'housingType', 'maritalStatus', 'employmentStatus', 
+                      'hasHealthInsurance', 'hasVehicle', 'updatedAt'
+                    ]);
       allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
     }
   }

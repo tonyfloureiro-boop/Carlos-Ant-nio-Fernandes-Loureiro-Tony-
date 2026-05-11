@@ -1,12 +1,13 @@
 import { GoogleGenAI } from "@google/genai";
-import { Transaction, Budget, Goal } from "../types";
+import { Transaction, Budget, Goal, RealityProfile } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
 export async function getFinancialTips(
   transactions: Transaction[],
   budgets: Budget[],
-  goals: Goal[]
+  goals: Goal[],
+  reality?: RealityProfile
 ) {
   if (!process.env.GEMINI_API_KEY) {
     return "AI configuration missing. Please add your GEMINI_API_KEY.";
@@ -29,13 +30,23 @@ export async function getFinancialTips(
         return acc;
       }, {} as Record<string, number>),
     budgets,
-    goals
+    goals,
+    lifeContext: reality ? {
+      filhos: reality.childrenCount,
+      moradia: reality.housingType === 'rented' ? 'alugada' : reality.housingType === 'owned' ? 'própria' : reality.housingType === 'financed' ? 'financiada' : 'familiar',
+      estadoCivil: reality.maritalStatus,
+      trabalho: reality.employmentStatus,
+      planoSaude: reality.hasHealthInsurance ? 'sim' : 'não',
+      veiculo: reality.hasVehicle ? 'sim' : 'não'
+    } : null
   };
 
   try {
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: `Você é um consultor financeiro especialista. Analise os seguintes dados (JSON) e forneça 3 dicas acionáveis, curtas e personalizadas em português para reduzir custos e atingir as metas.
+      
+      Leve em conta a 'lifeContext' (contexto de vida) do usuário se disponível para que as dicas sejam realistas (ex: quem tem filhos tem gastos diferentes de solteiros).
       
       Identifique padrões de gastos recorrentes ou categorias elevadas.
       
