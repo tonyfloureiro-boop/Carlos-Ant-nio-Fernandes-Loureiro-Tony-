@@ -1,5 +1,6 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Playfair+Display:ital,wght@1,900&display=swap');
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
 
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
@@ -7,8 +8,37 @@
   --font-serif: "Playfair Display", serif;
 }
 
+@keyframes asterisk-glow {
+  0%, 100% { opacity: 0.4; text-shadow: 0 0 1px rgba(244, 63, 94, 0.2); }
+  50% { opacity: 0.8; text-shadow: 0 0 4px rgba(244, 63, 94, 0.6); }
+}
+
+.gfmi-asterisk {
+  color: #f43f5e;
+  cursor: pointer;
+  animation: asterisk-glow 3s ease-in-out infinite;
+  display: inline-block;
+  font-weight: 900;
+  padding: 0 1px;
+  filter: drop-shadow(0 0 1px rgba(244, 63, 94, 0.2));
+  transform: translateY(-1px);
+}
+
 @layer base {
   body {
     @apply antialiased text-slate-800 bg-[#F8FAFC];
+  }
+
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 3px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    @apply bg-slate-200 rounded-full;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    @apply bg-slate-300;
   }
 }

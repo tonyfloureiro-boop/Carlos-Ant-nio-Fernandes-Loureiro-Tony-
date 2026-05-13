@@ -95,6 +95,15 @@ service cloud.firestore {
              (data.get('hasVehicle', false) is bool);
     }
 
+    function isValidCategory(data) {
+      return data.keys().hasAll(['userId', 'name', 'type']) &&
+             data.userId == request.auth.uid &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 64 &&
+             data.type in ['income', 'expense'] &&
+             (data.get('color', '') is string && data.get('color', '').size() <= 7) &&
+             (data.get('isDefault', false) is bool);
+    }
+
     // ---------------------------------------------------------
     // Routes
     // ---------------------------------------------------------
@@ -102,6 +111,11 @@ service cloud.firestore {
     // Default deny
     match /{document=**} {
       allow read, write: if false;
+    }
+
+    // Connection test
+    match /test/connection {
+      allow read: if true;
     }
 
     // User Profiles
@@ -172,6 +186,16 @@ service cloud.firestore {
                       'childrenCount', 'housingType', 'maritalStatus', 'employmentStatus', 
                       'hasHealthInsurance', 'hasVehicle', 'updatedAt'
                     ]);
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // Categories
+    match /categories/{categoryId} {
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow get: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidCategory(incoming());
+      allow update: if isSignedIn() && resource.data.userId == request.auth.uid && isValidCategory(incoming()) &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['name', 'type', 'color', 'isDefault']);
       allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
     }
   }

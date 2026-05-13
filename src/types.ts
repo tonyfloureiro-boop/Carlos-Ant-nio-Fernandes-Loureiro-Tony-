@@ -6,6 +6,15 @@ export interface UserProfile {
   monthlyIncome?: number;
 }
 
+export interface Category {
+  id?: string;
+  userId: string;
+  name: string;
+  type: 'income' | 'expense';
+  color?: string;
+  isDefault?: boolean;
+}
+
 export interface Transaction {
   id?: string;
   userId: string;
@@ -65,4 +74,13 @@ export interface RealityProfile {
   hasHealthInsurance: boolean;
   hasVehicle: boolean;
   updatedAt: Date;
+}
+
+export interface MonthlyReport {
+  id?: string;
+  userId: string;
+  month: string;
+  content: string;
+  summary?: any;
+  createdAt: Date;
 }

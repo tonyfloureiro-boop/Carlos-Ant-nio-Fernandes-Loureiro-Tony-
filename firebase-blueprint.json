@@ -1,5 +1,18 @@
 {
   "entities": {
+    "Category": {
+      "title": "Category",
+      "description": "Custom transaction category",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["income", "expense"] },
+        "color": { "type": "string" },
+        "isDefault": { "type": "boolean" }
+      },
+      "required": ["userId", "name", "type"]
+    },
     "User": {
       "title": "User Profile",
       "description": "Stores user preferences and basic info",
@@ -101,6 +114,19 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId"]
+    },
+    "MonthlyReport": {
+      "title": "Monthly Report",
+      "description": "AI-generated monthly financial overview",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "month": { "type": "string", "description": "YYYY-MM format" },
+        "content": { "type": "string" },
+        "summary": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "month", "content"]
     }
   },
   "firestore": {
@@ -110,6 +136,8 @@
     "goals/{goalId}": { "schema": "Goal", "description": "Financial goals" },
     "bills/{billId}": { "schema": "Bill", "description": "Bill alerts" },
     "investments/{investmentId}": { "schema": "Investment", "description": "User investments" },
-    "reality_profiles/{profileId}": { "schema": "RealityProfile", "description": "Life context profiles" }
+    "reality_profiles/{profileId}": { "schema": "RealityProfile", "description": "Life context profiles" },
+    "categories/{categoryId}": { "schema": "Category", "description": "User defined categories" },
+    "monthly_reports/{reportId}": { "schema": "MonthlyReport", "description": "Monthly AI analysis" }
   }
 }

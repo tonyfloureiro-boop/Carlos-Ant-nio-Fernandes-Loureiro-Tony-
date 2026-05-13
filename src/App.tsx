@@ -24,7 +24,11 @@ import {
   Briefcase,
   ShieldPlus,
   Car,
-  Pencil
+  Pencil,
+  ChevronDown,
+  Trash2,
+  Zap,
+  Settings
 } from "lucide-react";
 import { 
   signInWithPopup, 
@@ -43,7 +47,9 @@ import {
   orderBy, 
   deleteDoc,
   doc,
-  updateDoc
+  updateDoc,
+  getDocs,
+  limit
 } from "firebase/firestore";
 import { 
   BarChart, 
@@ -59,21 +65,49 @@ import {
 } from "recharts";
 import { motion, AnimatePresence } from "motion/react";
 import { auth, db } from "./lib/firebase";
-import { Transaction, Budget, Goal, Bill, UserProfile, Investment, RealityProfile } from "./types";
+import { AIAccountant } from "./components/AIAccountant";
+import { Transaction, Budget, Goal, Bill, UserProfile, Investment, RealityProfile, Category, MonthlyReport } from "./types";
 import { cn, formatCurrency } from "./lib/utils";
 import { Card, CardHeader, CardTitle, CardContent, Button, Input } from "./components/UI";
-import { getFinancialTips } from "./services/gemini";
-import { format } from "date-fns";
+import { getFinancialTips, generateMonthlyReport } from "./services/gemini";
+import { format, isLastDayOfMonth } from "date-fns";
 import { ptBR } from "date-fns/locale";
+import Markdown from "react-markdown";
 
 // Constants
 const INCOME_CATEGORIES = [
   "Salário", "Renda Extra", "Investimentos", "Vendas", "Restituição", "Presente", "Outros"
 ];
+
+function Logo({ className, light = false, size = "md" }: { className?: string, light?: boolean, size?: "sm" | "md" | "lg" }) {
+  const iconSizes = { sm: 14, md: 18, lg: 32 };
+  const containerSizes = { sm: "w-7 h-7", md: "w-9 h-9", lg: "w-16 h-16" };
+  const textSizes = { sm: "text-lg", md: "text-xl", lg: "text-4xl" };
+  
+  return (
+    <div className={cn("flex items-center gap-3", className)}>
+      <div className={cn(
+        "bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-500/20",
+        containerSizes[size]
+      )}>
+        <Zap size={iconSizes[size]} className="text-white fill-white/20" />
+      </div>
+      <span className={cn(
+        "font-black tracking-tighter",
+        light ? "text-white" : "text-slate-900",
+        textSizes[size]
+      )}>
+        Smart<span className="text-emerald-500">Fin</span>
+      </span>
+    </div>
+  );
+}
+
 const EXPENSE_CATEGORIES = [
-  "Moradia", "Alimentação", "Transporte", "Lazer", "Saúde", "Educação", "Compras", "Investimentos", "Dívidas", "Outros"
+  "G.F.M.I.*", "Moradia", "Alimentação", "Transporte", "Lazer", "Saúde", "Educação", "Compras", "Investimentos", "Dívidas", "Outros"
 ];
 const COLOR_MAP: Record<string, string> = {
+  "G.F.M.I.*": "#f43f5e",
   "Moradia": "#3b82f6",
   "Alimentação": "#f59e0b",
   "Transporte": "#10b981",
@@ -99,7 +133,8 @@ export default function App() {
   const [goals, setGoals] = useState<Goal[]>([]);
   const [bills, setBills] = useState<Bill[]>([]);
   const [investments, setInvestments] = useState<Investment[]>([]);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'investments' | 'budgets'>('dashboard');
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'investments' | 'budgets' | 'categories'>('dashboard');
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isInvestmentModalOpen, setIsInvestmentModalOpen] = useState(false);
@@ -109,6 +144,12 @@ export default function App() {
   const [realityProfile, setRealityProfile] = useState<RealityProfile | null>(null);
   const [isRealityModalOpen, setIsRealityModalOpen] = useState(false);
   const [isGoalModalOpen, setIsGoalModalOpen] = useState(false);
+  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  const [isGfmiInfoOpen, setIsGfmiInfoOpen] = useState(false);
+  const [isMonthlyReportOpen, setIsMonthlyReportOpen] = useState(false);
+  const [currentMonthlyReport, setCurrentMonthlyReport] = useState<string | null>(null);
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [editingCategory, setEditingCategory] = useState<Category | null>(null);
   const [isEditAmountModalOpen, setIsEditAmountModalOpen] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<{
     id: string;
@@ -152,6 +193,11 @@ export default function App() {
   const [goalTargetAmount, setGoalTargetAmount] = useState("");
   const [goalDeadline, setGoalDeadline] = useState("");
   const [contributionInputs, setContributionInputs] = useState<Record<string, string>>({});
+
+  // Category Form State
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [newCategoryType, setNewCategoryType] = useState<'income' | 'expense'>('expense');
+  const [newCategoryColor, setNewCategoryColor] = useState(COLORS[0]);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
@@ -243,6 +289,27 @@ export default function App() {
       setBudgets(data);
     });
 
+    const qCategories = query(collection(db, "categories"), where("userId", "==", user.uid));
+    const unsubCategories = onSnapshot(qCategories, async (snapshot) => {
+      if (snapshot.empty) {
+        // Seed initial categories
+        const defaults = [
+          ...INCOME_CATEGORIES.map(name => ({ name, type: 'income', color: COLOR_MAP[name] || COLORS[0], isDefault: true })),
+          ...EXPENSE_CATEGORIES.map(name => ({ name, type: 'expense', color: COLOR_MAP[name] || COLORS[1], isDefault: true }))
+        ];
+        
+        for (const cat of defaults) {
+          await addDoc(collection(db, "categories"), {
+            ...cat,
+            userId: user.uid
+          });
+        }
+        return;
+      }
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Category[];
+      setCategories(data);
+    });
+
     return () => {
       unsubT();
       unsubG();
@@ -250,6 +317,7 @@ export default function App() {
       unsubB();
       unsubReality();
       unsubBudgets();
+      unsubCategories();
     };
   }, [user]);
 
@@ -262,51 +330,143 @@ export default function App() {
     }
   };
 
+  useEffect(() => {
+    if (user && categories.length === 0 && loading === false) {
+      // Seed categories if none exist (could be first time user)
+      const seed = async () => {
+        // Double check in case of race condition
+        const q = query(collection(db, "categories"), where("userId", "==", user.uid), limit(1));
+        const snap = await getDocs(q);
+        if (snap.empty) {
+          const defaultCats = [
+            ...INCOME_CATEGORIES.map(name => ({ name, type: 'income', color: COLORS[0], isDefault: true })),
+            ...EXPENSE_CATEGORIES.map(name => ({ name, type: 'expense', color: COLORS[1], isDefault: true }))
+          ];
+          for (const cat of defaultCats) {
+            await addDoc(collection(db, "categories"), { ...cat, userId: user.uid });
+          }
+        }
+      };
+      seed();
+    }
+  }, [user, categories.length, loading]);
+
   const handleLogout = () => signOut(auth);
+
+  const availableIncomeCategories = useMemo(() => {
+    const list = categories.filter(c => c.type === 'income').map(c => c.name);
+    return Array.from(new Set([...INCOME_CATEGORIES, ...list]));
+  }, [categories]);
+
+  const availableExpenseCategories = useMemo(() => {
+    const list = categories.filter(c => c.type === 'expense').map(c => c.name);
+    return Array.from(new Set([...EXPENSE_CATEGORIES, ...list]));
+  }, [categories]);
 
   useEffect(() => {
     if (type === 'income') {
-      setCategory(INCOME_CATEGORIES[0]);
+      setCategory(availableIncomeCategories[0]);
     } else {
-      setCategory(EXPENSE_CATEGORIES[0]);
+      setCategory(availableExpenseCategories[0]);
     }
-  }, [type]);
+  }, [type, availableIncomeCategories, availableExpenseCategories]);
+
+  const normalizeCategoryName = (name: string) => {
+    if (name === "Gastos Fixos Mensais Inegociáveis" || name === "Gastos F. mensais I.") {
+      return "G.F.M.I.*";
+    }
+    return name;
+  };
+
+  const renderCategoryName = (name: string) => {
+    if (!name) return "";
+    if (name.includes('*')) {
+      const parts = name.split('*');
+      return (
+        <>
+          {parts[0]}
+          <span 
+            className="gfmi-asterisk ml-[1px]" 
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsGfmiInfoOpen(true);
+            }}
+          >
+            *
+          </span>
+          {parts[1]}
+        </>
+      );
+    }
+    return name;
+  };
 
   const handleAddTransaction = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || !amount) return;
+
+    // Support for Brazilian decimal format (comma instead of dot)
+    const normalizedAmount = amount.replace(',', '.');
+    const numericAmount = Number(normalizedAmount);
+
+    if (isNaN(numericAmount) || numericAmount <= 0) {
+      alert("Por favor, insira um valor válido maior que zero.");
+      return;
+    }
 
     try {
       const dateToSave = isDateUnspecified 
         ? new Date() // Use current time for sorting but mark as unspecified
         : new Date(transactionDate + "T12:00:00"); // Noon to avoid timezone issues
 
-      await addDoc(collection(db, "transactions"), {
-        userId: user.uid,
-        amount: Number(amount) || 0,
-        type,
-        category,
-        description,
-        date: Timestamp.fromDate(dateToSave),
-        createdAt: Timestamp.now(),
-        isDateUnspecified
-      });
-      setIsModalOpen(false);
-      setAmount("");
-      setDescription("");
-      setIsDateUnspecified(false);
-      setTransactionDate(format(new Date(), "yyyy-MM-dd"));
+      const path = "transactions";
+      try {
+        await addDoc(collection(db, path), {
+          userId: user.uid,
+          amount: numericAmount,
+          type,
+          category,
+          description: description.trim(),
+          date: Timestamp.fromDate(dateToSave),
+          createdAt: Timestamp.now(),
+          isDateUnspecified
+        });
+        setIsModalOpen(false);
+        setAmount("");
+        setDescription("");
+        setIsDateUnspecified(false);
+        setTransactionDate(format(new Date(), "yyyy-MM-dd"));
+      } catch (error: any) {
+        if (error.code === 'permission-denied' || error.message.includes('insufficient permissions')) {
+          handleFirestoreError(error, OperationType.WRITE, path);
+        }
+        throw error;
+      }
     } catch (error) {
       console.error("Add Transaction error:", error);
+      alert("Erro ao salvar transação. Verifique os dados e tente novamente.");
     }
   };
 
   const handleDeleteTransaction = async (id: string) => {
-    if (!confirm("Tem certeza que deseja excluir esta transação?")) return;
     try {
+      const path = `transactions/${id}`;
       await deleteDoc(doc(db, "transactions", id));
-    } catch (error) {
+    } catch (error: any) {
       console.error("Delete Error:", error);
+      if (error.code === 'permission-denied' || error.message.includes('insufficient permissions')) {
+        handleFirestoreError(error, OperationType.DELETE, `transactions/${id}`);
+      }
+    }
+  };
+
+  const handleDeleteCategory = async (id: string) => {
+    if (!confirm("Tem certeza que deseja excluir esta categoria? Isso não removerá transações já existentes com esta categoria.")) return;
+    try {
+      await deleteDoc(doc(db, "categories", id));
+    } catch (error: any) {
+      console.error("Delete Category Error:", error);
+      handleFirestoreError(error, OperationType.DELETE, `categories/${id}`);
     }
   };
 
@@ -343,6 +503,15 @@ export default function App() {
   const handleUpdateTransaction = async () => {
     if (!editingTransaction) return;
     
+    // Support for Brazilian decimal format (comma instead of dot)
+    const normalizedAmount = newAmountValue.replace(',', '.');
+    const numericAmount = Number(normalizedAmount);
+
+    if (isNaN(numericAmount) || numericAmount <= 0) {
+      alert("Por favor, insira um valor válido maior que zero.");
+      return;
+    }
+
     try {
       const dateToSave = editingTransaction.isDateUnspecified 
         ? new Date() 
@@ -351,8 +520,8 @@ export default function App() {
       const path = `transactions/${editingTransaction.id}`;
       try {
         await updateDoc(doc(db, "transactions", editingTransaction.id), {
-          amount: Number(newAmountValue) || 0,
-          description: editingTransaction.description,
+          amount: numericAmount,
+          description: editingTransaction.description.trim(),
           category: editingTransaction.category,
           isDateUnspecified: editingTransaction.isDateUnspecified,
           date: Timestamp.fromDate(dateToSave)
@@ -360,13 +529,14 @@ export default function App() {
         setIsEditAmountModalOpen(false);
         setEditingTransaction(null);
       } catch (error: any) {
-        if (error.code === 'permission-denied') {
+        if (error.code === 'permission-denied' || error.message.includes('insufficient permissions')) {
           handleFirestoreError(error, OperationType.WRITE, path);
         }
         throw error;
       }
     } catch (error) {
       console.error("Update Transaction Error:", error);
+      alert("Erro ao atualizar transação.");
     }
   };
 
@@ -538,6 +708,97 @@ export default function App() {
     }
   };
 
+  const handleAddCategory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || !newCategoryName) return;
+
+    try {
+      if (editingCategory && editingCategory.id) {
+        await updateDoc(doc(db, "categories", editingCategory.id), {
+          name: newCategoryName,
+          type: newCategoryType,
+          color: newCategoryColor
+        });
+      } else {
+        await addDoc(collection(db, "categories"), {
+          userId: user.uid,
+          name: newCategoryName,
+          type: newCategoryType,
+          color: newCategoryColor,
+          isDefault: false
+        });
+      }
+      setNewCategoryName("");
+      setEditingCategory(null);
+      setIsCategoryModalOpen(false);
+    } catch (e: any) {
+      console.error("Handle Category error:", e);
+      handleFirestoreError(e, editingCategory ? OperationType.UPDATE : OperationType.CREATE, "categories");
+    }
+  };
+
+  const handleEditCategory = (cat: Category) => {
+    setEditingCategory(cat);
+    setNewCategoryName(cat.name);
+    setNewCategoryType(cat.type);
+    setNewCategoryColor(cat.color);
+    setIsCategoryModalOpen(true);
+  };
+
+  useEffect(() => {
+    if (!user || loading) return;
+
+    const checkMonthlyReport = async () => {
+      // For development/testing purposes, you might want to force this
+      const today = new Date();
+      if (!isLastDayOfMonth(today)) return;
+
+      const monthKey = format(today, "yyyy-MM");
+      
+      try {
+        const q = query(
+          collection(db, "monthly_reports"),
+          where("userId", "==", user.uid),
+          where("month", "==", monthKey),
+          limit(1)
+        );
+
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          const doc = snap.docs[0].data();
+          // Check if session flag exists to not annoy user
+          if (!sessionStorage.getItem(`viewed_report_${monthKey}`)) {
+            setCurrentMonthlyReport(doc.content);
+            setIsMonthlyReportOpen(true);
+            sessionStorage.setItem(`viewed_report_${monthKey}`, 'true');
+          }
+          return;
+        }
+
+        // If it's the last day and no report, generate it
+        setIsGeneratingReport(true);
+        const report = await generateMonthlyReport(monthKey, transactions, budgets, goals, realityProfile || undefined);
+        
+        await addDoc(collection(db, "monthly_reports"), {
+          userId: user.uid,
+          month: monthKey,
+          content: report,
+          createdAt: new Date().toISOString()
+        });
+
+        setCurrentMonthlyReport(report);
+        setIsMonthlyReportOpen(true);
+        setIsGeneratingReport(false);
+        sessionStorage.setItem(`viewed_report_${monthKey}`, 'true');
+      } catch (e) {
+        console.error("Monthly report check error:", e);
+        setIsGeneratingReport(false);
+      }
+    };
+
+    checkMonthlyReport();
+  }, [user, loading, transactions, budgets, goals, realityProfile]);
+
   const currentMonthSpending = useMemo(() => {
     const now = new Date();
     const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -545,7 +806,8 @@ export default function App() {
     return transactions
       .filter(t => t.type === 'expense' && t.date >= firstDay)
       .reduce((acc, t) => {
-        acc[t.category] = (acc[t.category] || 0) + Number(t.amount);
+        const cat = normalizeCategoryName(t.category);
+        acc[cat] = (acc[cat] || 0) + Number(t.amount);
         return acc;
       }, {} as Record<string, number>);
   }, [transactions]);
@@ -561,7 +823,8 @@ export default function App() {
       .filter(t => t.type === 'expense')
       .reduce((acc, t) => {
         const amt = Number(t.amount) || 0;
-        acc[t.category] = (acc[t.category] || 0) + amt;
+        const cat = normalizeCategoryName(t.category);
+        acc[cat] = (acc[cat] || 0) + amt;
         return acc;
       }, {} as Record<string, number>);
 
@@ -578,18 +841,17 @@ export default function App() {
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="max-w-md w-full text-center space-y-8"
+          className="w-full max-w-md bg-white border border-slate-200 p-10 rounded-[3rem] shadow-2xl shadow-slate-200/50 space-y-8 relative overflow-hidden"
         >
-          <div className="flex justify-center">
-            <div className="w-20 h-20 bg-emerald-500 rounded-[2rem] flex items-center justify-center text-white shadow-2xl shadow-emerald-500/30">
-              <Wallet size={40} />
-            </div>
+          <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 rounded-full -mr-16 -mt-16 blur-2xl"></div>
+          <div className="absolute bottom-0 left-0 w-32 h-32 bg-indigo-500/5 rounded-full -ml-16 -mb-16 blur-2xl"></div>
+
+          <div className="flex flex-col items-center text-center space-y-6">
+            <Logo size="lg" className="flex-col gap-4" />
+            <p className="text-slate-500 text-lg font-medium max-w-[280px]">Controle suas finanças com inteligência e elegância.</p>
           </div>
-          <div className="space-y-3">
-            <h1 className="text-5xl font-bold tracking-tight text-slate-900">SmartFin</h1>
-            <p className="text-slate-500 text-lg font-medium">Controle suas finanças com inteligência e elegância.</p>
-          </div>
-          <Button onClick={handleLogin} className="w-full h-14 text-lg gap-3 bg-slate-900 hover:bg-slate-800 shadow-xl">
+          
+          <Button onClick={handleLogin} className="w-full h-16 text-lg font-bold gap-3 bg-slate-900 hover:bg-slate-800 shadow-2xl shadow-slate-900/20 rounded-2xl transition-all hover:scale-[1.02] active:scale-[0.98]">
             Entrar com Google
           </Button>
         </motion.div>
@@ -601,11 +863,8 @@ export default function App() {
     <div className="flex bg-[#F8FAFC] h-screen overflow-hidden font-sans text-slate-800">
       {/* Sidebar - Desktop */}
       <aside className="w-64 bg-slate-900 flex flex-col p-6 h-full shrink-0 hidden md:flex">
-        <div className="flex items-center gap-3 mb-12">
-          <div className="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center shadow-lg shadow-emerald-500/20">
-            <Wallet size={18} className="text-white" />
-          </div>
-          <span className="text-white font-bold text-xl tracking-tight">SmartFin</span>
+        <div className="mb-12">
+          <Logo light />
         </div>
         
         <nav className="space-y-1 flex-1">
@@ -627,6 +886,12 @@ export default function App() {
             active={activeTab === 'budgets'} 
             onClick={() => setActiveTab('budgets')} 
           />
+          <SidebarItem 
+            icon={<Briefcase size={24} />} 
+            label="Categorias" 
+            active={activeTab === 'categories'} 
+            onClick={() => setActiveTab('categories')} 
+          />
           <SidebarItem icon={<Calendar size={20} />} label="Contas a Pagar" />
           <SidebarItem icon={<Sparkles size={20} />} label="Objetivos" />
           <SidebarItem 
@@ -635,6 +900,16 @@ export default function App() {
             onClick={() => setIsRealityModalOpen(true)}
           />
           <SidebarItem icon={<History size={20} />} label="Histórico" />
+          <button 
+            onClick={() => setActiveTab('categories')} 
+            className={cn(
+              "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all group",
+              activeTab === 'categories' ? "bg-emerald-500 text-white shadow-lg shadow-emerald-500/20" : "text-slate-400 hover:bg-slate-800 hover:text-white"
+            )}
+          >
+            <Settings size={20} />
+            <span className="font-medium">Categorias</span>
+          </button>
         </nav>
 
         <div className="mt-auto space-y-4">
@@ -665,11 +940,8 @@ export default function App() {
       <div className="flex-1 flex flex-col h-full overflow-hidden pb-20 md:pb-0">
         {/* Header */}
         <header className="h-20 bg-white border-b border-slate-200 px-4 md:px-8 flex items-center justify-between shrink-0">
-          <div className="md:hidden flex items-center gap-2">
-             <div className="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center">
-                <Wallet size={16} className="text-white" />
-             </div>
-             <span className="text-slate-900 font-bold text-lg tracking-tight">SmartFin</span>
+          <div className="md:hidden">
+             <Logo size="sm" />
           </div>
           <div className="hidden md:block">
             <h1 className="text-2xl font-bold text-slate-900">Olá, {user.displayName?.split(' ')[0]}!</h1>
@@ -710,6 +982,8 @@ export default function App() {
                       const latest = transactions[0];
                       if (latest) handleEditTransaction(latest);
                     }}
+                    onDelete={handleDeleteTransaction}
+                    transactions={transactions}
                   />
                   <StatCard 
                     id="income-stat-card"
@@ -721,6 +995,8 @@ export default function App() {
                       const latest = transactions.find(t => t.type === 'income');
                       if (latest) handleEditTransaction(latest);
                     }}
+                    onDelete={handleDeleteTransaction}
+                    transactions={transactions.filter(t => t.type === 'income')}
                   />
                   <StatCard 
                     id="expense-stat-card"
@@ -733,6 +1009,8 @@ export default function App() {
                       const latest = transactions.find(t => t.type === 'expense');
                       if (latest) handleEditTransaction(latest);
                     }}
+                    onDelete={handleDeleteTransaction}
+                    transactions={transactions.filter(t => t.type === 'expense')}
                   />
                   <div className="bg-gradient-to-br from-indigo-500 to-purple-600 rounded-3xl p-6 text-white shadow-xl shadow-indigo-500/20 flex flex-col justify-center min-h-[120px]">
                     <p className="text-indigo-100 text-[10px] font-semibold uppercase tracking-wider">Economia IA (Meta)</p>
@@ -773,9 +1051,28 @@ export default function App() {
                                 ))}
                               </Pie>
                               <Tooltip 
-                                contentStyle={{ borderRadius: '24px', border: 'none', boxShadow: '0 20px 40px rgba(0,0,0,0.1)', padding: '20px' }}
-                                itemStyle={{ fontWeight: '800' }}
-                                formatter={(val: number) => formatCurrency(val)}
+                                content={({ active, payload }) => {
+                                  if (active && payload && payload.length) {
+                                    const data = payload[0].payload;
+                                    return (
+                                      <div className="bg-white p-5 rounded-[2rem] shadow-2xl border-none">
+                                        <div className="flex flex-col gap-1">
+                                          <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Categoria</span>
+                                          <span className="text-lg font-black text-slate-900 leading-tight">
+                                            {renderCategoryName(data.name)}
+                                          </span>
+                                          <div className="mt-2 pt-2 border-t border-slate-50 flex items-center gap-2">
+                                            <div className="w-2 h-2 rounded-full" style={{ backgroundColor: payload[0].fill }} />
+                                            <span className="font-mono font-bold text-slate-700">
+                                              {formatCurrency(Number(payload[0].value))}
+                                            </span>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    );
+                                  }
+                                  return null;
+                                }}
                               />
                             </PieChart>
                           </ResponsiveContainer>
@@ -990,7 +1287,7 @@ export default function App() {
                                         "px-3 py-1 text-[10px] font-black rounded-lg uppercase tracking-wider",
                                         t.type === 'income' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'
                                       )}>
-                                        {t.category}
+                                        {renderCategoryName(t.category)}
                                       </span>
                                     </td>
                                     <td className={cn(
@@ -1011,7 +1308,7 @@ export default function App() {
                                         onClick={() => t.id && handleDeleteTransaction(t.id)}
                                         className="p-2 text-slate-200 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all opacity-0 group-hover:opacity-100 shadow-sm"
                                       >
-                                        <X size={16} />
+                                        <Trash2 size={16} />
                                       </button>
                                     </td>
                                   </tr>
@@ -1045,7 +1342,7 @@ export default function App() {
                                         {t.isDateUnspecified ? "Sem data" : format(t.date, "dd MMM", { locale: ptBR })}
                                       </span>
                                       <span className="w-1 h-1 bg-slate-200 rounded-full" />
-                                      <span className="text-[10px] font-bold text-slate-400 capitalize">{t.category}</span>
+                                      <span className="text-[10px] font-bold text-slate-400 capitalize">{renderCategoryName(t.category)}</span>
                                     </div>
                                   </div>
                                 </div>
@@ -1064,12 +1361,13 @@ export default function App() {
                                       {t.type === 'income' ? '+' : '-'}{formatCurrency(t.amount)}
                                     </p>
                                   </div>
-                                  <button 
-                                    onClick={() => t.id && handleDeleteTransaction(t.id)}
-                                    className="p-1.5 text-slate-300 hover:text-rose-500"
-                                  >
-                                    <X size={14} />
-                                  </button>
+                                    <button 
+                                      onClick={() => t.id && handleDeleteTransaction(t.id)}
+                                      className="flex items-center justify-center h-10 w-10 text-rose-500 hover:bg-rose-50 rounded-xl transition-all active:scale-90"
+                                      aria-label="Excluir transação"
+                                    >
+                                      <Trash2 size={18} />
+                                    </button>
                                 </div>
                               </div>
                             ))
@@ -1291,7 +1589,8 @@ export default function App() {
                     </div>
                   ) : (
                     budgets.map(budget => {
-                      const spent = currentMonthSpending[budget.category] || 0;
+                      const normalizedCat = normalizeCategoryName(budget.category);
+                      const spent = currentMonthSpending[normalizedCat] || 0;
                       const percent = Math.min(100, (spent / budget.amount) * 100);
                       const isDanger = percent >= 90;
                       const isWarning = percent >= 75 && percent < 90;
@@ -1300,7 +1599,7 @@ export default function App() {
                         <Card key={budget.id} className="p-8 rounded-[2rem] border-slate-100 shadow-sm hover:shadow-xl transition-all group overflow-hidden relative">
                            <div className="flex justify-between items-start mb-6">
                               <div>
-                                <h4 className="text-xl font-bold text-slate-900">{budget.category}</h4>
+                                <h4 className="text-xl font-bold text-slate-900">{renderCategoryName(normalizedCat)}</h4>
                                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">Limite Mensal</p>
                               </div>
                               <button 
@@ -1360,6 +1659,65 @@ export default function App() {
               </div>
             )}
 
+            {activeTab === 'categories' && (
+              <div className="space-y-8 animate-in slide-in-from-right-4 duration-500">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-3xl font-bold tracking-tight text-slate-900">Categorias Personalizadas</h2>
+                    <p className="text-slate-500 font-medium">Gerencie suas categorias de gastos e ganhos.</p>
+                  </div>
+                  <Button onClick={() => { setEditingCategory(null); setNewCategoryName(""); setIsCategoryModalOpen(true); }} className="bg-slate-900 hover:bg-slate-800 gap-2 h-12 px-6 shadow-xl shadow-slate-900/20">
+                    <PlusCircle size={20} />
+                    Nova Categoria
+                  </Button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                  {categories.map(cat => (
+                    <Card key={cat.id} className="p-6 rounded-3xl border-slate-100 shadow-sm flex flex-col justify-between hover:shadow-md transition-all group">
+                      <div className="flex justify-between items-start">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-xl bg-slate-50 flex items-center justify-center" style={{ color: cat.color }}>
+                            <Briefcase size={20} />
+                          </div>
+                          <div>
+                            <h4 className="font-bold text-slate-900">{renderCategoryName(cat.name)}</h4>
+                            <span className={cn(
+                              "text-[10px] font-black uppercase tracking-widest",
+                              cat.type === 'income' ? 'text-emerald-500' : 'text-rose-500'
+                            )}>
+                              {cat.type === 'income' ? 'Entrada' : 'Saída'}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <button 
+                            onClick={() => handleEditCategory(cat)}
+                            className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl opacity-0 group-hover:opacity-100 transition-all active:scale-95"
+                            title="Editar Categoria"
+                          >
+                            <Pencil size={16} />
+                          </button>
+                          <button 
+                            onClick={() => cat.id && handleDeleteCategory(cat.id)}
+                            className="p-2 text-rose-500 hover:bg-rose-50 rounded-xl opacity-0 group-hover:opacity-100 transition-all active:scale-95"
+                            title="Excluir Categoria"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+                  {categories.length === 0 && (
+                    <div className="col-span-full py-12 text-center text-slate-300">
+                      <p className="text-sm font-medium">Nenhuma categoria personalizada criada ainda.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
           </div>
         </main>
       </div>
@@ -1381,6 +1739,8 @@ export default function App() {
         </div>
         <MobileNavItem 
           icon={<History size={24} />} 
+          active={activeTab === 'categories'}
+          onClick={() => setActiveTab('categories')}
         />
         <MobileNavItem 
           icon={<Target size={24} />} 
@@ -1392,7 +1752,7 @@ export default function App() {
       {/* Transaction Modal */}
       <AnimatePresence>
         {isModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -1464,7 +1824,7 @@ export default function App() {
                        onChange={(e) => setCategory(e.target.value)}
                        className="w-full h-12 px-4 bg-slate-50 border-none rounded-2xl text-sm font-bold text-slate-900 focus:ring-2 focus:ring-slate-900 transition-all appearance-none outline-none"
                      >
-                       {(type === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES).map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                       {(type === 'income' ? availableIncomeCategories : availableExpenseCategories).map(cat => <option key={cat} value={cat}>{cat}</option>)}
                      </select>
                    </div>
                    <div className="space-y-2">
@@ -1679,7 +2039,137 @@ export default function App() {
             </motion.div>
           </div>
         )}
-        {/* Budget Modal */}
+        {/* Category Modal */}
+        {isGfmiInfoOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-slate-900/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              className="bg-white rounded-[2rem] p-8 max-w-sm w-full shadow-2xl relative overflow-hidden"
+            >
+              <div className="absolute top-0 left-0 w-full h-2 bg-rose-500" />
+              
+              <div className="flex flex-col items-center text-center space-y-4">
+                <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center text-rose-500">
+                  <span className="text-4xl font-black">*</span>
+                </div>
+                
+                <div>
+                  <h3 className="text-2xl font-black text-slate-900 tracking-tighter">G.F.M.I.</h3>
+                  <p className="text-rose-500 font-bold text-sm tracking-wide mt-1">
+                    Gastos Fixos Mensais Inegociáveis
+                  </p>
+                </div>
+
+                <div className="bg-slate-50 p-4 rounded-2xl text-slate-500 text-sm leading-relaxed font-medium">
+                  Esta categoria agrupa as despesas que ocorrem todo mês e que não podem ser cortadas ou negociadas facilmente (Ex: Aluguel, Condomínio, etc).
+                </div>
+
+                <Button 
+                  onClick={() => setIsGfmiInfoOpen(false)}
+                  className="w-full h-12 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold shadow-xl shadow-slate-900/10"
+                >
+                  Entendi
+                </Button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {isCategoryModalOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }} 
+              animate={{ opacity: 1 }} 
+              exit={{ opacity: 0 }}
+              onClick={() => setIsCategoryModalOpen(false)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-md"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 30 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 30 }}
+              className="relative w-full max-w-lg bg-white rounded-[2.5rem] shadow-2xl p-8 space-y-8"
+            >
+              <div className="flex justify-between items-center">
+                <div>
+                  <h2 className="text-3xl font-black text-slate-900 tracking-tighter">
+                    {editingCategory ? 'Editar Categoria' : 'Nova Categoria'}
+                  </h2>
+                  <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mt-1">
+                    {editingCategory ? 'Atualize as informações' : 'Personalize sua organização'}
+                  </p>
+                </div>
+                <button 
+                  onClick={() => setIsCategoryModalOpen(false)}
+                  className="p-3 bg-slate-50 text-slate-400 hover:text-slate-900 rounded-2xl transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <form onSubmit={handleAddCategory} className="space-y-6">
+                <div className="space-y-3">
+                  <label className="text-xs font-black uppercase tracking-widest text-slate-500">Nome da Categoria</label>
+                  <Input 
+                    placeholder="Ex: Assinaturas, Freelance..." 
+                    value={newCategoryName}
+                    onChange={(e) => setNewCategoryName(e.target.value)}
+                    className="h-14 rounded-2xl text-md font-bold"
+                  />
+                </div>
+
+                <div className="space-y-3">
+                  <label className="text-xs font-black uppercase tracking-widest text-slate-500">Tipo</label>
+                  <div className="flex p-1.5 bg-slate-100 rounded-2xl">
+                    <button
+                      type="button"
+                      onClick={() => setNewCategoryType('expense')}
+                      className={cn(
+                        "flex-1 py-3 text-xs font-black uppercase tracking-widest rounded-xl transition-all",
+                        newCategoryType === 'expense' ? "bg-white text-rose-500 shadow-md" : "text-slate-400 hover:text-slate-600"
+                      )}
+                    >
+                      Saída
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewCategoryType('income')}
+                      className={cn(
+                        "flex-1 py-3 text-xs font-black uppercase tracking-widest rounded-xl transition-all",
+                        newCategoryType === 'income' ? "bg-white text-emerald-500 shadow-md" : "text-slate-400 hover:text-slate-600"
+                      )}
+                    >
+                      Entrada
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <label className="text-xs font-black uppercase tracking-widest text-slate-500">Cor Identificadora</label>
+                  <div className="grid grid-cols-8 gap-2">
+                    {COLORS.map(color => (
+                      <button
+                        key={color}
+                        type="button"
+                        onClick={() => setNewCategoryColor(color)}
+                        className={cn(
+                          "w-full aspect-square rounded-lg transition-all border-4",
+                          newCategoryColor === color ? "border-slate-900 scale-110" : "border-transparent"
+                        )}
+                        style={{ backgroundColor: color }}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                <Button type="submit" className="w-full h-14 bg-slate-900 hover:bg-slate-800 text-white rounded-2xl font-bold shadow-xl shadow-slate-900/10">
+                  {editingCategory ? 'Salvar Alterações' : 'Criar Categoria'}
+                </Button>
+              </form>
+            </motion.div>
+          </div>
+        )}
         {isBudgetModalOpen && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
             <motion.div 
@@ -1716,7 +2206,7 @@ export default function App() {
                     onChange={(e) => setBudgetCategory(e.target.value)}
                     className="w-full h-14 px-4 bg-slate-50 border-none rounded-2xl text-md font-bold text-slate-900 focus:ring-2 focus:ring-slate-900 transition-all outline-none"
                   >
-                    {EXPENSE_CATEGORIES.map(c => (
+                    {availableExpenseCategories.map(c => (
                       <option key={c} value={c}>{c}</option>
                     ))}
                   </select>
@@ -1884,7 +2374,7 @@ export default function App() {
                         onChange={(e) => setEditingTransaction({...editingTransaction, category: e.target.value})}
                         className="bg-slate-950 border border-emerald-500/20 text-emerald-400 h-10 px-3 rounded-lg focus:border-emerald-500/50 transition-all outline-none font-mono text-sm"
                       >
-                        {(editingTransaction.type === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES).map(cat => (
+                        {(editingTransaction.type === 'income' ? availableIncomeCategories : availableExpenseCategories).map(cat => (
                           <option key={cat} value={cat} className="bg-slate-900">{cat}</option>
                         ))}
                       </select>
@@ -1940,6 +2430,88 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* Monthly Report Modal */}
+      <AnimatePresence>
+        {isMonthlyReportOpen && currentMonthlyReport && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 md:p-10">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsMonthlyReportOpen(false)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-xl"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-4xl bg-white rounded-[3rem] shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
+            >
+              <div className="p-8 md:p-12 border-b border-slate-50 flex items-center justify-between bg-gradient-to-r from-slate-900 to-slate-800 text-white">
+                <div>
+                  <div className="flex items-center gap-3 mb-2">
+                    <div className="w-10 h-10 bg-emerald-500 rounded-2xl flex items-center justify-center shadow-lg shadow-emerald-500/20">
+                      <Zap size={24} className="text-white" />
+                    </div>
+                    <span className="text-xs font-black uppercase tracking-[0.3em] text-emerald-400">Monthly Intelligence</span>
+                  </div>
+                  <h2 className="text-3xl md:text-5xl font-black tracking-tight">Relatório de Fechamento</h2>
+                  <p className="text-slate-400 font-medium mt-2">Visão completa dos seus resultados no mês.</p>
+                </div>
+                <button 
+                  onClick={() => setIsMonthlyReportOpen(false)}
+                  className="p-3 bg-white/10 hover:bg-white/20 text-white rounded-2xl transition-all"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-8 md:p-12 custom-scrollbar">
+                <div className="prose prose-slate max-w-none prose-headings:font-black prose-headings:tracking-tight prose-headings:text-slate-900 prose-p:text-slate-600 prose-p:leading-relaxed prose-strong:text-slate-900 prose-table:border-collapse prose-th:bg-slate-50 prose-th:p-3 prose-td:p-3 prose-td:border-b prose-td:border-slate-50">
+                  <Markdown>{currentMonthlyReport}</Markdown>
+                </div>
+              </div>
+
+              <div className="p-8 border-t border-slate-50 bg-slate-50/50 flex justify-end">
+                <Button 
+                  onClick={() => setIsMonthlyReportOpen(false)}
+                  className="bg-slate-900 hover:bg-slate-800 h-14 px-10 rounded-2xl text-lg font-bold shadow-xl shadow-slate-900/20"
+                >
+                  Continuar para o próximo mês
+                </Button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {isGeneratingReport && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="bg-white p-10 rounded-[3rem] shadow-2xl flex flex-col items-center text-center max-w-sm"
+            >
+              <div className="w-20 h-20 bg-emerald-500 rounded-3xl flex items-center justify-center mb-6 shadow-xl shadow-emerald-500/20 animate-bounce">
+                <Sparkles size={40} className="text-white" />
+              </div>
+              <h3 className="text-2xl font-black text-slate-900 mb-2">Gerando seu Relatório</h3>
+              <p className="text-slate-500 font-medium leading-relaxed">
+                Nossa IA está analisando todos os seus movimentos financeiros deste mês para criar um fechamento detalhado...
+              </p>
+              <div className="mt-8 flex gap-2">
+                <span className="w-3 h-3 bg-emerald-500 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
+                <span className="w-3 h-3 bg-emerald-500 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
+                <span className="w-3 h-3 bg-emerald-500 rounded-full animate-bounce"></span>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <AIAccountant transactions={transactions} balances={totals} user={user} />
     </div>
   );
 }
@@ -1977,41 +2549,113 @@ function MobileNavItem({ icon, active = false, onClick }: any) {
   );
 }
 
-function StatCard({ label, value, subtext, trend, type, className, indicatorColor = "bg-emerald-100", onEdit }: any) {
+function StatCard({ label, value, subtext, trend, type, className, indicatorColor = "bg-emerald-100", onEdit, onDelete, transactions = [] }: any) {
+  const [isExpanded, setIsExpanded] = useState(false);
+
   return (
-    <Card className={cn("p-6 flex flex-col justify-between h-36 md:h-44 rounded-[2rem] hover:scale-[1.02] transition-transform group/stat relative", className)}>
-      {onEdit && (
+    <Card className={cn(
+      "p-6 flex flex-col justify-between rounded-[2rem] transition-all duration-500 ease-in-out group/stat relative overflow-hidden", 
+      isExpanded ? "md:h-auto min-h-[11rem] h-auto shadow-2xl ring-2 ring-slate-100" : "h-36 md:h-44",
+      className
+    )}>
+      <div className="absolute top-3 right-3 flex gap-2 z-30">
+        {onEdit && !isExpanded && (
+          <button 
+            onClick={(e) => {
+              e.stopPropagation();
+              onEdit();
+            }}
+            className="p-2 bg-slate-50/80 backdrop-blur-sm text-slate-500 hover:text-indigo-600 hover:bg-white rounded-xl transition-all shadow-sm border border-slate-100 cursor-pointer"
+            title="Ajustar último lançamento"
+          >
+            <Pencil size={14} />
+          </button>
+        )}
         <button 
           onClick={(e) => {
             e.stopPropagation();
-            onEdit();
+            setIsExpanded(!isExpanded);
           }}
-          className="absolute top-3 right-3 p-2 bg-slate-50/80 backdrop-blur-sm text-slate-500 hover:text-indigo-600 hover:bg-white rounded-xl transition-all opacity-100 z-30 shadow-sm border border-slate-100 cursor-pointer"
-          title="Ajustar último lançamento"
+          className={cn(
+            "p-2 rounded-xl transition-all shadow-sm border border-slate-100 cursor-pointer",
+            isExpanded ? "bg-slate-900 text-white border-slate-800 rotate-180" : "bg-slate-50/80 backdrop-blur-sm text-slate-500 hover:text-indigo-600 hover:bg-white"
+          )}
+          title={isExpanded ? "Recolher" : "Ver transações"}
         >
-          <Pencil size={14} />
+          <ChevronDown size={14} />
         </button>
-      )}
+      </div>
+
       <div className="flex justify-between items-start">
         <div>
           <p className="text-slate-500 text-[11px] font-black uppercase tracking-widest leading-tight mb-2 opacity-60">{label}</p>
           <h3 className={cn(
-            "text-2xl md:text-4xl font-black leading-none font-mono tracking-tighter",
+            "text-2xl md:text-4xl font-black leading-none font-mono tracking-tighter transition-all duration-300",
+            isExpanded ? "md:text-2xl text-xl mb-4" : "",
             type === 'income' ? 'text-emerald-600' : type === 'expense' ? 'text-rose-600' : 'text-slate-900'
           )}>
             {formatCurrency(value)}
           </h3>
         </div>
       </div>
-      <div className="mt-4">
-        {trend && (
-           <p className={cn("text-[11px] font-black uppercase tracking-wider flex items-center gap-1", trend === 'up' ? 'text-emerald-500' : 'text-rose-500')}>
-             {trend === 'up' ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
-             {subtext}
-           </p>
+
+      {!isExpanded && (
+        <div className="mt-4">
+          {trend && (
+             <p className={cn("text-[11px] font-black uppercase tracking-wider flex items-center gap-1", trend === 'up' ? 'text-emerald-500' : 'text-rose-500')}>
+               {trend === 'up' ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+               {subtext}
+             </p>
+          )}
+          {!trend && <div className={cn("w-full h-2 rounded-full", indicatorColor)}></div>}
+        </div>
+      )}
+
+      <AnimatePresence>
+        {isExpanded && (
+          <motion.div 
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="overflow-hidden mt-2 pt-4 border-t border-slate-50"
+          >
+            <div className="space-y-3 max-h-64 overflow-y-auto pr-2 custom-scrollbar">
+              {transactions.length > 0 ? (
+                transactions.map((t: any) => (
+                  <div key={t.id} className="flex justify-between items-center group/item p-1 hover:bg-slate-50 rounded-lg transition-colors">
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (t.id && onDelete) {
+                            onDelete(t.id);
+                          }
+                        }}
+                        className="flex items-center justify-center h-10 w-10 md:h-8 md:w-8 text-rose-500 md:text-slate-300 hover:text-rose-600 rounded-xl transition-all md:opacity-0 md:group-hover/item:opacity-100 active:bg-rose-50 relative z-50 cursor-pointer"
+                        aria-label="Excluir transação"
+                      >
+                        <Trash2 size={18} className="md:w-3 md:h-3" />
+                      </button>
+                      <div className="flex flex-col">
+                        <span className="text-[10px] font-bold text-slate-900 truncate max-w-[120px]">{t.description || 'S/ Descrição'}</span>
+                        <span className="text-[9px] text-slate-400 font-medium">{format(t.date instanceof Date ? t.date : t.date.toDate(), "dd MMM", { locale: ptBR })}</span>
+                      </div>
+                    </div>
+                    <span className={cn(
+                      "text-[10px] font-mono font-black tracking-tight",
+                      t.type === 'income' ? 'text-emerald-500' : 'text-rose-500'
+                    )}>
+                      {t.type === 'income' ? '+' : '-'}{formatCurrency(t.amount)}
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <div className="text-center py-4 opacity-30 italic text-[10px] text-slate-500">Nenhuma transação encontrada</div>
+              )}
+            </div>
+          </motion.div>
         )}
-        {!trend && <div className={cn("w-full h-2 rounded-full", indicatorColor)}></div>}
-      </div>
+      </AnimatePresence>
     </Card>
   );
 }
